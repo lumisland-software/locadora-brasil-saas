@@ -1,0 +1,13 @@
+feat: criar base SaaS para gestão de locadoras com rastreamento e manutenção por km
+
+- cria autenticação, configuração inicial e isolamento multiempresa
+- adiciona módulos de locatários, veículos, locações, cobranças e despesas
+- implementa vistorias, multas e auditoria operacional
+- cria planos de manutenção por quilometragem e data
+- recalcula pneus, travões, óleo e revisões conforme odómetro do veículo
+- integra rastreadores Traccar e APIs REST genéricas configuráveis
+- adiciona sincronização automática por Cron Trigger a cada 15 minutos
+- atualiza posição, velocidade, ignição e quilometragem da frota
+- adiciona mapa interativo com Leaflet e OpenStreetMap
+- protege credenciais de rastreamento com AES-GCM
+- inclui migração D1, documentação de instalação e roadmap comercial

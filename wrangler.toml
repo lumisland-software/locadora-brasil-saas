@@ -1,0 +1,20 @@
+name = "locadora-brasil-saas"
+main = "src/index.js"
+compatibility_date = "2026-07-20"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "locadora-saas-db"
+database_id = "SUBSTITUA_PELO_DATABASE_ID"
+migrations_dir = "migrations"
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+APP_NAME = "Lumisland Locadoras"
+SESSION_DAYS = "14"
