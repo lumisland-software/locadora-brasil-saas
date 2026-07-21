@@ -9,8 +9,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "locadora-saas-db"
-database_id = "SUBSTITUA_PELO_DATABASE_ID"
-migrations_dir = "migrations"
+database_id = "9275d6d8-2eca-4451-a586-b2a993fdb992"
 
 [triggers]
 crons = ["*/15 * * * *"]
