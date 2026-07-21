@@ -77,7 +77,7 @@ const child = spawn(process.execPath, [runtimePath], {
   cwd: directory,
   env: {
     ...process.env,
-    ABM_PORTAL_URL: process.env.ABM_PORTAL_URL || 'https://abmtecnologia.abmprotege.net/'
+    ABM_PORTAL_URL: process.env.ABM_PORTAL_URL || 'https://abmtecnologia.abmprotege.net/relatorios/rotas'
   },
   stdio: 'inherit'
 });
