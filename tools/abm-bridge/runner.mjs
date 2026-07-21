@@ -9,7 +9,7 @@ const sourcePath = join(directory, 'index.mjs');
 const runtimePath = join(directory, '.index-runtime.mjs');
 
 const source = await readFile(sourcePath, 'utf8');
-const functionPattern = /async function waitForAuthenticatedReportPage\(page\) \{[\s\S]*?\n\}\n\nasync function readPortalContext/;
+const functionPattern = /async function waitForAuthenticatedReportPage\(page\) \{[\s\S]*?\r?\n\}\r?\n\r?\nasync function readPortalContext/;
 
 const replacement = `async function waitForAuthenticatedReportPage(page) {
   console.log('Aguardando login e abertura da página Relatórios > Rota...');
@@ -37,7 +37,10 @@ await writeFile(runtimePath, source.replace(functionPattern, replacement), 'utf8
 
 const child = spawn(process.execPath, [runtimePath], {
   cwd: directory,
-  env: process.env,
+  env: {
+    ...process.env,
+    ABM_PORTAL_URL: process.env.ABM_PORTAL_URL || 'https://abmtecnologia.abmprotege.net/'
+  },
   stdio: 'inherit'
 });
 
