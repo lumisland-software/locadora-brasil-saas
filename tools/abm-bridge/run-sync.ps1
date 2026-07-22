@@ -3,6 +3,21 @@ param(
   [string]$SecretFile = (Join-Path $PSScriptRoot '.secrets\autonomous.bin')
 )
 
+function Unprotect-LocalMachineData {
+  param([Parameter(Mandatory)][string]$Path)
+  $Encrypted = [IO.File]::ReadAllBytes($Path)
+  $Bytes = [Security.Cryptography.ProtectedData]::Unprotect(
+    $Encrypted,
+    $null,
+    [Security.Cryptography.DataProtectionScope]::LocalMachine
+  )
+  try {
+    $Json = [Text.Encoding]::UTF8.GetString($Bytes)
+    return $Json | ConvertFrom-Json
+  }
+  finally { [Array]::Clear($Bytes, 0, $Bytes.Length) }
+}
+
 $ErrorActionPreference = 'Stop'
 $BridgePath = (Resolve-Path $BridgePath).Path
 $SecretFile = [IO.Path]::GetFullPath($SecretFile)
@@ -24,16 +39,28 @@ if (-not $Config.abm_username -or -not $Config.abm_password -or -not $Config.ing
   exit 2
 }
 
+$NpmPath = [string]$Config.npm_path
+if (-not $NpmPath -or -not (Test-Path $NpmPath)) {
+  "[$(Get-Date -Format o)] npm.cmd não encontrado no caminho guardado. Execute setup-autonomous.ps1 novamente." | Out-File -FilePath $LogFile -Append -Encoding utf8
+  exit 2
+}
+$BrowsersPath = [string]$Config.playwright_browsers_path
+if (-not $BrowsersPath -or -not (Test-Path $BrowsersPath)) {
+  "[$(Get-Date -Format o)] Chromium partilhado não encontrado. Execute setup-autonomous.ps1 novamente." | Out-File -FilePath $LogFile -Append -Encoding utf8
+  exit 2
+}
+
 $env:ABM_USERNAME = [string]$Config.abm_username
 $env:ABM_PASSWORD = [string]$Config.abm_password
 $env:ABM_INGEST_TOKEN = [string]$Config.ingest_token
 $env:ABM_INGEST_URL = [string]$Config.ingest_url
 $env:WORKSHOP_ID = [string]$Config.workshop_id
+$env:PLAYWRIGHT_BROWSERS_PATH = $BrowsersPath
 
 Push-Location $BridgePath
 try {
   "[$(Get-Date -Format o)] Início da sincronização agendada." | Out-File -FilePath $LogFile -Append -Encoding utf8
-  & npm.cmd run sync *>> $LogFile
+  & $NpmPath run sync *>> $LogFile
   $ExitCode = $LASTEXITCODE
   "[$(Get-Date -Format o)] Fim da sincronização. ExitCode=$ExitCode" | Out-File -FilePath $LogFile -Append -Encoding utf8
   exit $ExitCode
@@ -48,24 +75,8 @@ finally {
   Remove-Item Env:ABM_INGEST_TOKEN -ErrorAction SilentlyContinue
   Remove-Item Env:ABM_INGEST_URL -ErrorAction SilentlyContinue
   Remove-Item Env:WORKSHOP_ID -ErrorAction SilentlyContinue
+  Remove-Item Env:PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
   $Config = $null
   [GC]::Collect()
   Pop-Location
-}
-
-function Unprotect-LocalMachineData {
-  param([Parameter(Mandatory)][string]$Path)
-  $Encrypted = [IO.File]::ReadAllBytes($Path)
-  $Bytes = [Security.Cryptography.ProtectedData]::Unprotect(
-    $Encrypted,
-    $null,
-    [Security.Cryptography.DataProtectionScope]::LocalMachine
-  )
-  try {
-    $Json = [Text.Encoding]::UTF8.GetString($Bytes)
-    return $Json | ConvertFrom-Json
-  }
-  finally {
-    [Array]::Clear($Bytes, 0, $Bytes.Length)
-  }
 }
