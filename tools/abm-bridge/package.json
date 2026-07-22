@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node runner.mjs",
-    "check": "node --check index.mjs && node --check runner.mjs"
+    "start": "node runner.mjs && node upload.mjs",
+    "check": "node --check index.mjs && node --check runner.mjs && node --check upload.mjs"
   },
   "dependencies": {
     "playwright": "^1.54.1"
