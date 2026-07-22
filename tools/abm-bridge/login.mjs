@@ -1,8 +1,11 @@
 import { chromium } from 'playwright';
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
+const directory = dirname(fileURLToPath(import.meta.url));
+process.chdir(directory);
 await loadLocalEnv();
 
 const portalUrl = process.env.ABM_PORTAL_URL || 'https://abmtecnologia.abmprotege.net/relatorios/rotas';
