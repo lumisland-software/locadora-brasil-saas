@@ -6,11 +6,52 @@ param(
   [switch]$IncludePossibleDuplicateCharge
 )
 
+function Convert-SecureStringToPlainText {
+  param([Parameter(Mandatory)][SecureString]$SecureValue)
+  $Pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureValue)
+  try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($Pointer) }
+  finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Pointer) }
+}
+
+function Protect-LocalMachineData {
+  param(
+    [Parameter(Mandatory)][string]$Text,
+    [Parameter(Mandatory)][string]$Path
+  )
+  $Bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+  $Encrypted = [Security.Cryptography.ProtectedData]::Protect(
+    $Bytes,
+    $null,
+    [Security.Cryptography.DataProtectionScope]::LocalMachine
+  )
+  [IO.File]::WriteAllBytes($Path, $Encrypted)
+  [Array]::Clear($Bytes, 0, $Bytes.Length)
+}
+
+function Protect-LocalDirectory {
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$CurrentUser
+  )
+  New-Item -ItemType Directory -Path $Path -Force | Out-Null
+  $Acl = New-Object Security.AccessControl.DirectorySecurity
+  $Acl.SetAccessRuleProtection($true, $false)
+  $Inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+  $Propagation = [Security.AccessControl.PropagationFlags]::None
+  $Access = [Security.AccessControl.AccessControlType]::Allow
+  $Rights = [Security.AccessControl.FileSystemRights]::FullControl
+  $Acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($CurrentUser, $Rights, $Inheritance, $Propagation, $Access)))
+  $Acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule('NT AUTHORITY\SYSTEM', $Rights, $Inheritance, $Propagation, $Access)))
+  Set-Acl -Path $Path -AclObject $Acl
+}
+
 $ErrorActionPreference = 'Stop'
 $BridgePath = $PSScriptRoot
 $RepoRoot = (Resolve-Path (Join-Path $BridgePath '..\..')).Path
 $SecretDirectory = Join-Path $BridgePath '.secrets'
 $SecretFile = Join-Path $SecretDirectory 'autonomous.bin'
+$ProfileDirectory = Join-Path $BridgePath '.abm-profile'
+$BrowsersPath = Join-Path $BridgePath '.playwright-browsers'
 $EnvFile = Join-Path $BridgePath '.env'
 
 $Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
@@ -19,12 +60,12 @@ if (-not $Principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Adm
   throw 'Execute este script numa janela do PowerShell aberta como Administrador.'
 }
 
-if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
-  throw 'npm.cmd não foi encontrado. Instale o Node.js antes de continuar.'
-}
-if (-not (Get-Command npx.cmd -ErrorAction SilentlyContinue)) {
-  throw 'npx.cmd não foi encontrado. Instale o Node.js antes de continuar.'
-}
+$NpmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
+$NpxCommand = Get-Command npx.cmd -ErrorAction SilentlyContinue
+if (-not $NpmCommand) { throw 'npm.cmd não foi encontrado. Instale o Node.js antes de continuar.' }
+if (-not $NpxCommand) { throw 'npx.cmd não foi encontrado. Instale o Node.js antes de continuar.' }
+$NpmPath = $NpmCommand.Source
+$NpxPath = $NpxCommand.Source
 
 Write-Host 'Configuração autónoma do bridge ABM Protege' -ForegroundColor Cyan
 Write-Host 'As credenciais serão cifradas com DPAPI no próprio computador e não serão gravadas em texto simples.'
@@ -48,19 +89,22 @@ $IngestToken = Convert-SecureStringToPlainText $IngestTokenSecure
 if (-not $AbmPassword) { throw 'A senha ABM é obrigatória.' }
 if (-not $IngestToken) { throw 'O ABM_INGEST_TOKEN é obrigatório.' }
 
+Protect-LocalDirectory -Path $SecretDirectory -CurrentUser $Identity.Name
+Protect-LocalDirectory -Path $ProfileDirectory -CurrentUser $Identity.Name
+Protect-LocalDirectory -Path $BrowsersPath -CurrentUser $Identity.Name
+
 $Payload = [ordered]@{
-  version = 1
+  version = 2
   created_at = (Get-Date).ToString('o')
   abm_username = $AbmUsername
   abm_password = $AbmPassword
   ingest_token = $IngestToken
   workshop_id = $WorkshopId
   ingest_url = $IngestUrl
+  npm_path = $NpmPath
+  playwright_browsers_path = $BrowsersPath
 } | ConvertTo-Json -Compress
-
-New-Item -ItemType Directory -Path $SecretDirectory -Force | Out-Null
 Protect-LocalMachineData -Text $Payload -Path $SecretFile
-Protect-SecretDirectory -Path $SecretDirectory -CurrentUser $Identity.Name
 
 $EnvContent = @"
 ABM_PORTAL_URL=$PortalUrl
@@ -82,41 +126,41 @@ $Payload = $null
 [GC]::Collect()
 
 Write-Host 'A instalar dependências e validar o código...' -ForegroundColor Cyan
+$PreviousBrowsersPath = $env:PLAYWRIGHT_BROWSERS_PATH
+$env:PLAYWRIGHT_BROWSERS_PATH = $BrowsersPath
 Push-Location $RepoRoot
 try {
-  & npm.cmd install
+  & $NpmPath install
   if ($LASTEXITCODE -ne 0) { throw 'npm install falhou na raiz do projeto.' }
 
   Push-Location $BridgePath
   try {
-    & npm.cmd install
+    & $NpmPath install
     if ($LASTEXITCODE -ne 0) { throw 'npm install falhou no bridge ABM.' }
-    & npx.cmd playwright install chromium
+    & $NpxPath playwright install chromium
     if ($LASTEXITCODE -ne 0) { throw 'A instalação do Chromium do Playwright falhou.' }
   }
-  finally {
-    Pop-Location
-  }
+  finally { Pop-Location }
 
-  & npm.cmd run check
+  & $NpmPath run check
   if ($LASTEXITCODE -ne 0) { throw 'npm run check encontrou erros.' }
 
   if (-not $SkipSeed) {
     Write-Host 'A executar o seed remoto duas vezes para validar a idempotência...' -ForegroundColor Cyan
     $env:WORKSHOP_ID = $WorkshopId
     $SeedArguments = @('run', 'seed:locadora-teste', '--', '--remote')
-    if ($IncludePossibleDuplicateCharge) {
-      $SeedArguments += '--include-possible-duplicate-charge'
-    }
+    if ($IncludePossibleDuplicateCharge) { $SeedArguments += '--include-possible-duplicate-charge' }
 
-    & npm.cmd @SeedArguments
+    & $NpmPath @SeedArguments
     if ($LASTEXITCODE -ne 0) { throw 'A primeira execução do seed remoto falhou.' }
-    & npm.cmd @SeedArguments
+    & $NpmPath @SeedArguments
     if ($LASTEXITCODE -ne 0) { throw 'A segunda execução do seed remoto falhou.' }
   }
 }
 finally {
   Remove-Item Env:WORKSHOP_ID -ErrorAction SilentlyContinue
+  if ($null -eq $PreviousBrowsersPath) { Remove-Item Env:PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue }
+  else { $env:PLAYWRIGHT_BROWSERS_PATH = $PreviousBrowsersPath }
   Pop-Location
 }
 
@@ -136,46 +180,5 @@ Write-Host 'Configuração concluída.' -ForegroundColor Green
 Write-Host "Seed: $(-not $SkipSeed)"
 Write-Host "Tarefa: $TaskName, a cada $IntervalMinutes minutos, executada como SYSTEM."
 Write-Host "Segredos cifrados em: $SecretFile"
+Write-Host "Chromium partilhado com SYSTEM em: $BrowsersPath"
 Write-Host 'Não é necessário manter um navegador aberto nem uma sessão do utilizador iniciada no Windows.'
-
-function Convert-SecureStringToPlainText {
-  param([Parameter(Mandatory)][SecureString]$SecureValue)
-  $Pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureValue)
-  try {
-    return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($Pointer)
-  }
-  finally {
-    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($Pointer)
-  }
-}
-
-function Protect-LocalMachineData {
-  param(
-    [Parameter(Mandatory)][string]$Text,
-    [Parameter(Mandatory)][string]$Path
-  )
-  $Bytes = [Text.Encoding]::UTF8.GetBytes($Text)
-  $Encrypted = [Security.Cryptography.ProtectedData]::Protect(
-    $Bytes,
-    $null,
-    [Security.Cryptography.DataProtectionScope]::LocalMachine
-  )
-  [IO.File]::WriteAllBytes($Path, $Encrypted)
-  [Array]::Clear($Bytes, 0, $Bytes.Length)
-}
-
-function Protect-SecretDirectory {
-  param(
-    [Parameter(Mandatory)][string]$Path,
-    [Parameter(Mandatory)][string]$CurrentUser
-  )
-  $Acl = New-Object Security.AccessControl.DirectorySecurity
-  $Acl.SetAccessRuleProtection($true, $false)
-  $Inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-  $Propagation = [Security.AccessControl.PropagationFlags]::None
-  $Access = [Security.AccessControl.AccessControlType]::Allow
-  $Rights = [Security.AccessControl.FileSystemRights]::FullControl
-  $Acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($CurrentUser, $Rights, $Inheritance, $Propagation, $Access)))
-  $Acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule('NT AUTHORITY\SYSTEM', $Rights, $Inheritance, $Propagation, $Access)))
-  Set-Acl -Path $Path -AclObject $Acl
-}
