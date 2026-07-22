@@ -7,7 +7,9 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "db:local": "wrangler d1 migrations apply locadora-saas-db --local",
-    "db:remote": "wrangler d1 migrations apply locadora-saas-db --remote"
+    "db:remote": "wrangler d1 migrations apply locadora-saas-db --remote",
+    "seed:locadora-teste": "node scripts/seed-locadora-teste.mjs",
+    "check": "node --check src/index.js && node --check src/entry.js && node --check src/abm-ingest.js && node --check scripts/seed-locadora-teste.mjs && npm --prefix tools/abm-bridge run check"
   },
   "devDependencies": {
     "wrangler": "4.112.0"
