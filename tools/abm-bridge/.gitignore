@@ -1,5 +1,6 @@
 node_modules/
 .abm-profile/
+.secrets/
 abm-snapshot*.json
 abm-discovery.json
 .env
