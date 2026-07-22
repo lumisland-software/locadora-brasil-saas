@@ -1,69 +1,117 @@
-# ABM Protege Bridge — protótipo
+# ABM Protege Bridge
 
-Coletor local para validar a integração não oficial entre o portal ABM Protege e o Locadora Brasil.
+Coletor local para integrar o portal ABM Protege ao Locadora Brasil. A integração utiliza endpoints internos não oficiais do portal; portanto, pode precisar de ajustes quando a ABM alterar a interface ou os serviços internos.
 
-## O que este protótipo faz
+## Segurança
 
-- abre o portal ABM num Chromium controlado pelo Playwright;
-- permite que o utilizador faça o login manualmente;
-- reutiliza a sessão autenticada sem guardar a senha no código;
-- obtém o token temporário criado pelo próprio portal;
-- lê os veículos disponíveis na conta;
-- consulta o relatório de rota e o consolidado diário;
-- tenta recolher a posição atual pelo WebSocket usado pelo portal;
-- grava um ficheiro JSON normalizado, sem senha e sem token.
+- a senha do portal não é guardada no código;
+- cookies e perfil do navegador ficam apenas em `.abm-profile/`;
+- o token de ingestão fica apenas no ficheiro local `.env` e nos secrets do Worker;
+- snapshots, perfis, `.env` e logs são ignorados pelo Git;
+- os logs locais contêm apenas a saída operacional dos scripts; os scripts nunca imprimem passwords, cookies ou tokens;
+- execute o bridge apenas num computador controlado.
 
-## Aviso
+## Instalação
 
-A ABM não oferece uma API pública/oficial para este uso. Os endpoints internos podem mudar ou deixar de funcionar. Antes de uso comercial, confirme se o contrato da conta permite automação e reutilização dos dados.
-
-## Instalação no Windows
-
-Abra o PowerShell nesta pasta e execute:
+Na pasta `tools/abm-bridge`:
 
 ```powershell
 npm install
 npx playwright install chromium
+Copy-Item .env.example .env
 ```
 
-## Primeiro teste
-
-```powershell
-npm start
-```
-
-O Chromium será aberto. Faça login normalmente e abra **Relatórios > Rota**. O programa continua quando encontrar a lista de veículos.
-
-No fim será criado:
+Preencha no `.env`:
 
 ```text
-abm-snapshot.json
+ABM_INGEST_URL=https://seu-worker.workers.dev/api/integrations/abm/ingest
+ABM_INGEST_TOKEN=valor-configurado-no-worker
 ```
 
-## Testar apenas um veículo
-
-Use o ID interno exibido no campo `abm_vehicle_id` do primeiro resultado:
+## 1. Criar ou renovar a sessão
 
 ```powershell
-$env:ABM_VEHICLE_ID="1243401"
-npm start
+npm run login
 ```
 
-## Consultar uma data específica
+Este comando:
+
+1. abre o Chromium visível;
+2. permite o login manual;
+3. aguarda a abertura de **Relatórios > Rota**;
+4. confirma que existem veículos carregados;
+5. guarda a sessão apenas em `.abm-profile/`;
+6. fecha o navegador.
+
+A senha não é gravada.
+
+## 2. Sincronizar sem abrir janela
 
 ```powershell
-$env:ABM_REPORT_DATE="2026-07-21"
-npm start
+npm run sync
 ```
 
-## Segurança
+O comando executa o Chromium em modo headless, recolhe os veículos, grava `abm-snapshot.json` e envia o snapshot ao Worker.
 
-- não coloque utilizador, senha, cookies ou tokens no GitHub;
-- a pasta `.abm-profile` contém a sessão do navegador e fica ignorada pelo Git;
-- execute este protótipo apenas num computador controlado;
-- elimine `.abm-profile` para terminar a sessão guardada;
-- não envie `abm-snapshot.json` publicamente, pois contém matrículas e posições.
+Quando a sessão estiver inválida, termina com o código `2` e apresenta:
 
-## Próxima etapa
+```text
+Sessão ABM inexistente ou expirada. Execute npm run login.
+```
 
-Depois de confirmar que os quilómetros e posições coincidem com o portal, o coletor será ligado a um endpoint autenticado do Worker do Locadora Brasil.
+Não existe fallback automático para abrir uma janela durante uma tarefa agendada.
+
+## 3. Enviar novamente o último snapshot
+
+```powershell
+npm run upload
+```
+
+Esse comando não consulta o portal. Ele envia apenas o último `abm-snapshot.json` existente.
+
+## 4. Verificar a sintaxe
+
+```powershell
+npm run check
+```
+
+## Agendar a cada 15 minutos no Windows
+
+Antes de registar a tarefa, execute pelo menos uma vez:
+
+```powershell
+npm run login
+npm run sync
+```
+
+Depois abra o PowerShell nesta pasta e execute:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\register-task.ps1
+```
+
+A tarefa criada chama `run-sync.ps1` a cada 15 minutos e grava os resultados em `logs/`.
+
+Para usar outro nome ou intervalo:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\register-task.ps1 `
+  -TaskName "Locadora-ABM-Producao" `
+  -IntervalMinutes 30
+```
+
+A tarefa usa `LogonType Interactive`: o utilizador precisa estar autenticado no Windows. Isso evita guardar a senha do Windows no Agendador.
+
+## Variáveis opcionais
+
+| Variável | Função |
+|---|---|
+| `ABM_REPORT_DATE` | Data do relatório em `YYYY-MM-DD`. Vazio usa a data atual da conta ABM. |
+| `ABM_VEHICLE_ID` | Restringe o teste a um veículo. |
+| `ABM_LIVE_TIMEOUT_MS` | Tempo de espera pelo WebSocket. |
+| `ABM_SESSION_CHECK_TIMEOUT_MS` | Tempo para confirmar a sessão no modo headless. |
+| `ABM_OUTPUT` | Caminho do snapshot. |
+
+## Limitação contratual
+
+A ABM não disponibiliza uma API pública oficial para este fluxo. Antes da utilização comercial, confirme se o contrato permite automação e reutilização dos dados. Os endpoints internos podem mudar sem aviso.
