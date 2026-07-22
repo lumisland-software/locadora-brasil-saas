@@ -2,115 +2,134 @@
 
 Coletor local para integrar o portal ABM Protege ao Locadora Brasil. A integração utiliza endpoints internos não oficiais do portal; portanto, pode precisar de ajustes quando a ABM alterar a interface ou os serviços internos.
 
-## Segurança
+## Modo autónomo recomendado
 
-- a senha do portal não é guardada no código;
-- cookies e perfil do navegador ficam apenas em `.abm-profile/`;
-- o token de ingestão fica apenas no ficheiro local `.env` e nos secrets do Worker;
-- snapshots, perfis, `.env` e logs são ignorados pelo Git;
-- os logs locais contêm apenas a saída operacional dos scripts; os scripts nunca imprimem passwords, cookies ou tokens;
-- execute o bridge apenas num computador controlado.
+O modo autónomo faz todo o fluxo após uma única configuração:
 
-## Instalação
+- guarda utilizador, senha e `ABM_INGEST_TOKEN` cifrados pelo Windows;
+- importa o seed da locadora na D1 remota;
+- autentica no portal ABM em modo headless;
+- recolhe e envia os veículos;
+- renova a sessão automaticamente quando ela expirar;
+- executa a sincronização a cada 15 minutos;
+- funciona mesmo sem um utilizador com sessão iniciada no Windows.
+
+Abra o PowerShell **como Administrador** na pasta `tools/abm-bridge` e execute:
+
+```powershell
+npm run setup:auto
+```
+
+O assistente solicitará uma única vez:
+
+- utilizador/e-mail ABM;
+- senha ABM;
+- `ABM_INGEST_TOKEN` configurado no Worker;
+- `WORKSHOP_ID` da locadora;
+- endpoint de ingestão.
+
+O script instala as dependências, valida o código, executa o seed remoto duas vezes para confirmar a idempotência, testa o primeiro sync e cria a tarefa `Lumisland-ABM-Sync`.
+
+Para não executar o seed:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup-autonomous.ps1 -SkipSeed
+```
+
+Para importar explicitamente a segunda cobrança manual possivelmente duplicada:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup-autonomous.ps1 -IncludePossibleDuplicateCharge
+```
+
+## Segurança das credenciais
+
+- nenhum segredo é guardado no GitHub;
+- utilizador, senha e token não são escritos no `.env`;
+- os segredos ficam cifrados em `.secrets/autonomous.bin` com DPAPI `LocalMachine`;
+- a pasta `.secrets/` permite acesso apenas ao utilizador que configurou o bridge e ao `SYSTEM`;
+- o Agendador executa como `SYSTEM`, sem guardar a senha do Windows;
+- os segredos são descriptografados apenas em memória durante a execução;
+- `.secrets/`, `.abm-profile/`, `.env`, snapshots e logs são ignorados pelo Git;
+- os scripts não imprimem passwords, cookies ou tokens;
+- administradores locais do computador continuam tecnicamente capazes de aceder aos dados, como ocorre com qualquer segredo guardado numa máquina Windows.
+
+## Sincronização automática
+
+A tarefa do Windows executa:
+
+```powershell
+run-sync.ps1
+```
+
+O fluxo é:
+
+1. descriptografar as credenciais em memória;
+2. verificar a sessão ABM em modo headless;
+3. quando expirada, executar `auto-login.mjs` sem abrir janela;
+4. recolher quilometragem, posição, velocidade, ignição e data;
+5. gerar `abm-snapshot.json`;
+6. enviar o snapshot ao Worker;
+7. gravar o resultado em `logs/scheduler-AAAA-MM-DD.log`;
+8. eliminar logs com mais de 30 dias.
+
+A tarefa é executada a cada 15 minutos, mesmo sem utilizador autenticado no Windows. O computador precisa estar ligado e com acesso à internet.
+
+## Comandos disponíveis
 
 Na pasta `tools/abm-bridge`:
 
 ```powershell
-npm install
-npx playwright install chromium
-Copy-Item .env.example .env
-```
-
-Preencha no `.env`:
-
-```text
-ABM_INGEST_URL=https://seu-worker.workers.dev/api/integrations/abm/ingest
-ABM_INGEST_TOKEN=valor-configurado-no-worker
-```
-
-## 1. Criar ou renovar a sessão
-
-```powershell
+npm run setup:auto
 npm run login
-```
-
-Este comando:
-
-1. abre o Chromium visível;
-2. permite o login manual;
-3. aguarda a abertura de **Relatórios > Rota**;
-4. confirma que existem veículos carregados;
-5. guarda a sessão apenas em `.abm-profile/`;
-6. fecha o navegador.
-
-A senha não é gravada.
-
-## 2. Sincronizar sem abrir janela
-
-```powershell
+npm run auto-login
 npm run sync
-```
-
-O comando executa o Chromium em modo headless, recolhe os veículos, grava `abm-snapshot.json` e envia o snapshot ao Worker.
-
-Quando a sessão estiver inválida, termina com o código `2` e apresenta:
-
-```text
-Sessão ABM inexistente ou expirada. Execute npm run login.
-```
-
-Não existe fallback automático para abrir uma janela durante uma tarefa agendada.
-
-## 3. Enviar novamente o último snapshot
-
-```powershell
 npm run upload
-```
-
-Esse comando não consulta o portal. Ele envia apenas o último `abm-snapshot.json` existente.
-
-## 4. Verificar a sintaxe
-
-```powershell
 npm run check
 ```
 
-## Agendar a cada 15 minutos no Windows
+### `npm run login`
 
-Antes de registar a tarefa, execute pelo menos uma vez:
+Abre o Chromium visível para autenticação manual. É mantido como recurso de diagnóstico ou para portais que exijam CAPTCHA/MFA.
 
-```powershell
-npm run login
-npm run sync
+### `npm run auto-login`
+
+Tenta autenticar sem abrir janela usando as variáveis `ABM_USERNAME` e `ABM_PASSWORD` fornecidas em memória pelo `run-sync.ps1`.
+
+### `npm run sync`
+
+Valida a sessão, tenta renová-la automaticamente, recolhe os dados e envia o snapshot.
+
+### `npm run upload`
+
+Envia apenas o último `abm-snapshot.json`, sem consultar o portal.
+
+### `npm run check`
+
+Valida a sintaxe de todos os ficheiros JavaScript do bridge.
+
+## Ajustar o formulário de login
+
+O login automático usa seletores comuns para campos de utilizador, senha e botão de entrada. Caso a ABM altere o formulário, configure no `.env` seletores CSS separados por vírgula:
+
+```text
+ABM_USERNAME_SELECTOR=#campo-utilizador,input[name="usuario"]
+ABM_PASSWORD_SELECTOR=#campo-senha,input[name="senha"]
+ABM_SUBMIT_SELECTOR=button[type="submit"],#entrar
 ```
 
-Depois abra o PowerShell nesta pasta e execute:
+Essas variáveis não contêm segredos.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\register-task.ps1
-```
+## Limitações inevitáveis
 
-A tarefa criada chama `run-sync.ps1` a cada 15 minutos e grava os resultados em `logs/`.
+A automação não consegue ultrapassar legitimamente:
 
-Para usar outro nome ou intervalo:
+- CAPTCHA;
+- autenticação multifator que exija confirmação humana;
+- bloqueio de dispositivo ou IP;
+- alteração profunda dos endpoints internos ou do formulário ABM.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\register-task.ps1 `
-  -TaskName "Locadora-ABM-Producao" `
-  -IntervalMinutes 30
-```
-
-A tarefa usa `LogonType Interactive`: o utilizador precisa estar autenticado no Windows. Isso evita guardar a senha do Windows no Agendador.
-
-## Variáveis opcionais
-
-| Variável | Função |
-|---|---|
-| `ABM_REPORT_DATE` | Data do relatório em `YYYY-MM-DD`. Vazio usa a data atual da conta ABM. |
-| `ABM_VEHICLE_ID` | Restringe o teste a um veículo. |
-| `ABM_LIVE_TIMEOUT_MS` | Tempo de espera pelo WebSocket. |
-| `ABM_SESSION_CHECK_TIMEOUT_MS` | Tempo para confirmar a sessão no modo headless. |
-| `ABM_OUTPUT` | Caminho do snapshot. |
+Nesses casos, o sync termina com código `2`, grava o motivo no log e o `npm run login` pode ser utilizado para diagnóstico. Não existe tentativa de contornar CAPTCHA ou MFA.
 
 ## Limitação contratual
 
