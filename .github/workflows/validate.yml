@@ -1,0 +1,62 @@
+name: Validar Locadora Brasil
+
+on:
+  pull_request:
+  push:
+    branches:
+      - feat/integracao-abm-protege
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Obter repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Instalar dependências da raiz
+        run: npm ci
+
+      - name: Instalar dependências do bridge sem Chromium
+        run: npm --prefix tools/abm-bridge install --ignore-scripts
+
+      - name: Validar JavaScript
+        run: npm run check
+
+      - name: Validar scripts PowerShell
+        shell: pwsh
+        run: |
+          $parseErrors = @()
+          Get-ChildItem tools/abm-bridge -Filter *.ps1 -File | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $_.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors) {
+              $parseErrors += $errors | ForEach-Object { "$($_.Extent.File):$($_.Extent.StartLineNumber) $($_.Message)" }
+            }
+          }
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
+      - name: Validar geração idempotente do seed
+        shell: pwsh
+        run: |
+          $env:WORKSHOP_ID = '00000000-0000-4000-8000-000000000001'
+          npm run seed:locadora-teste -- --print-sql | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

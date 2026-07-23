@@ -1,5 +1,5 @@
 name = "locadora-brasil-saas"
-main = "src/index.js"
+main = "src/entry.js"
 compatibility_date = "2026-07-20"
 
 [assets]
@@ -9,7 +9,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "locadora-saas-db"
-database_id = "9275d6d8-2eca-4451-a586-b2a993fdb992"
+database_id = "a653f1cd-7446-45e1-b82e-e31f2ca07826"
 
 [triggers]
 crons = ["*/15 * * * *"]

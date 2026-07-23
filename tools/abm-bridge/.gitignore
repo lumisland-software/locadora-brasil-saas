@@ -1,0 +1,9 @@
+node_modules/
+.abm-profile/
+.playwright-browsers/
+.secrets/
+abm-snapshot*.json
+abm-discovery.json
+.env
+logs/
+*.log

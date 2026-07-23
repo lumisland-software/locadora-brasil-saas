@@ -39,6 +39,7 @@ async function handleApi(request, env, ctx, url) {
   }
 
   if (path === '/api/dashboard' && method === 'GET') return dashboard(env, user);
+  if (path === '/api/tracker/live' && method === 'GET') return trackerLive(env, user, url);
   if (path === '/api/map/vehicles' && method === 'GET') return mapVehicles(env, user);
 
   if (path === '/api/customers') {
@@ -208,6 +209,49 @@ async function dashboard(env, user) {
     overdue,
     maintenance: maintenance.results || [],
     financial: { ...financial, profit: Number(financial?.revenue || 0) - Number(financial?.expenses || 0) }
+  });
+}
+
+async function trackerLive(env, user, url) {
+  const requestedMinutes = Number(url.searchParams.get('fresh_minutes') || 30);
+  const freshMinutes = Number.isFinite(requestedMinutes)
+    ? Math.min(1440, Math.max(1, Math.trunc(requestedMinutes)))
+    : 30;
+
+  const rows = await env.DB.prepare(`SELECT
+      v.id, v.type, v.plate, v.brand, v.model, v.status, v.odometer_km,
+      v.last_lat, v.last_lng, v.last_speed, v.last_ignition, v.last_tracker_at,
+      tp.id AS tracker_provider_id, tp.name AS tracker_provider_name, tp.type AS tracker_provider_type,
+      CASE
+        WHEN v.last_tracker_at IS NULL THEN 'never'
+        WHEN datetime(v.last_tracker_at) >= datetime('now', '-' || ? || ' minutes') THEN 'online'
+        ELSE 'stale'
+      END AS tracker_status,
+      CASE
+        WHEN v.last_tracker_at IS NULL THEN NULL
+        ELSE MAX(0, CAST((julianday('now') - julianday(v.last_tracker_at)) * 86400 AS INTEGER))
+      END AS age_seconds
+    FROM vehicles v
+    LEFT JOIN tracker_providers tp ON tp.id = v.tracker_provider_id
+    WHERE v.workshop_id = ? AND v.tracker_provider_id IS NOT NULL
+    ORDER BY v.plate`).bind(freshMinutes, user.workshop_id).all();
+
+  const items = (rows.results || []).map(item => ({
+    ...item,
+    last_ignition: item.last_ignition == null ? null : Boolean(item.last_ignition)
+  }));
+  const summary = items.reduce((totals, item) => {
+    totals.total++;
+    totals[item.tracker_status] = (totals[item.tracker_status] || 0) + 1;
+    if (item.last_ignition === true) totals.ignition_on++;
+    return totals;
+  }, { total: 0, online: 0, stale: 0, never: 0, ignition_on: 0 });
+
+  return json({
+    generated_at: new Date().toISOString(),
+    fresh_minutes: freshMinutes,
+    summary,
+    items
   });
 }
 

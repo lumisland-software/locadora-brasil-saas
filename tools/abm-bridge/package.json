@@ -1,0 +1,19 @@
+{
+  "name": "locadora-brasil-abm-bridge",
+  "version": "0.3.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "npm run sync",
+    "setup:auto": "powershell -NoProfile -ExecutionPolicy Bypass -File ./setup-autonomous.ps1",
+    "login": "node login.mjs",
+    "auto-login": "node auto-login.mjs",
+    "sync": "node sync.mjs && node upload.mjs",
+    "upload": "node upload.mjs",
+    "discover": "node discover.mjs",
+    "check": "node --check runtime.mjs && node --check index.mjs && node --check login.mjs && node --check auto-login.mjs && node --check sync.mjs && node --check upload.mjs && node --check discover.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.54.1"
+  }
+}

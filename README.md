@@ -24,16 +24,29 @@ Primeira versão funcional de um sistema para locadoras de motos e carros, const
 - alertas de pneus, travões, óleo, revisão e outros componentes;
 - auditoria das ações principais.
 
+## Integração ABM Protege
+
+A branch `feat/integracao-abm-protege` inclui um bridge local para recolher dados do portal ABM e enviá-los ao Worker.
+
+O modo autónomo recomendado é configurado uma única vez no Windows:
+
+```powershell
+cd tools\abm-bridge
+npm run setup:auto
+```
+
+O assistente guarda as credenciais cifradas pelo Windows, executa o seed idempotente, testa a sincronização e regista uma tarefa como `SYSTEM` a cada 15 minutos. Consulte `tools/abm-bridge/README.md` para os detalhes e limitações de CAPTCHA/MFA.
+
 ## Arquitetura do rastreamento
 
 ```text
 API do fornecedor GPS
         ↓
-Adaptador Traccar ou REST genérico
+Adaptador Traccar, REST genérico ou bridge ABM
         ↓
 Posição + velocidade + ignição + odómetro
         ↓
-Veículo correspondente pelo ID externo
+Veículo correspondente pelo ID externo ou matrícula
         ↓
 Atualização da quilometragem
         ↓
@@ -206,7 +219,7 @@ Esta é uma base funcional e executável, não um produto final pronto para come
 ## Segurança
 
 - As credenciais dos rastreadores são cifradas antes de serem gravadas no D1.
-- As palavras-passe usam PBKDF2-SHA-256 com 210.000 iterações.
+- As palavras-passe usam PBKDF2-SHA-256 conforme a implementação atual do Worker.
 - As sessões são guardadas por hash e enviadas em cookie `HttpOnly`, `Secure` e `SameSite=Lax`.
 - A aplicação deve ser publicada apenas em HTTPS.
 - Não aceite URLs de integração GPS sem validar o fornecedor. Uma URL configurável pode criar risco de SSRF se for disponibilizada a utilizadores sem confiança.
