@@ -255,7 +255,7 @@ async function renderTracking() {
   const center = withPosition.length ? [Number(withPosition[0].last_lat), Number(withPosition[0].last_lng)] : [-15.77972, -47.92972];
   mapInstance = L.map('map', { zoomControl: false }).setView(center, withPosition.length ? 12 : 4);
   L.control.zoom({ position: 'bottomright' }).addTo(mapInstance);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
     maxZoom: 20,
     attribution: '&copy; OpenStreetMap &copy; CARTO'
   }).addTo(mapInstance);
