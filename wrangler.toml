@@ -1,6 +1,7 @@
 name = "locadora-brasil-saas"
 main = "src/entry.js"
 compatibility_date = "2026-07-20"
+account_id = "d0c156564ee6e870adbafe4dbfbd287b"
 
 [assets]
 directory = "./public"
