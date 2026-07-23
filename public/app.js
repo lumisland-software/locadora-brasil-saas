@@ -4,6 +4,7 @@ let currentUser = null;
 let currentWorkshop = null;
 let currentPage = 'dashboard';
 let mapInstance = null;
+let trackingTimer = null;
 
 const navGroups = [
   { label: 'Visão geral', items: [['dashboard','▦','Dashboard']] },
@@ -127,6 +128,8 @@ function renderShell() {
 
 async function navigate(page) {
   currentPage = page;
+  clearInterval(trackingTimer);
+  trackingTimer = null;
   mapInstance?.remove();
   mapInstance = null;
   app.querySelectorAll('[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === page));
@@ -205,18 +208,156 @@ async function renderRentals() {
 }
 
 async function renderTracking() {
-  const data = await api('/api/map/vehicles');
-  setContent(`<div class="page-head"><div><h2>Rastreamento da frota</h2><p>Posição, ignição, velocidade, última comunicação e quilometragem.</p></div><button class="btn" id="refresh-map">Atualizar</button></div><div id="map"></div>`);
-  const center = data.items.length ? [data.items[0].last_lat, data.items[0].last_lng] : [-15.77972, -47.92972];
-  mapInstance = L.map('map').setView(center, data.items.length ? 12 : 4);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(mapInstance);
+  const data = await api('/api/tracker/live');
+  const withPosition = data.items.filter(v => Number.isFinite(Number(v.last_lat)) && Number.isFinite(Number(v.last_lng)));
+  const summary = data.summary || {};
+  setContent(`
+    <div class="tracking-head">
+      <div>
+        <div class="eyebrow"><span class="live-pulse"></span> Central de monitorização</div>
+        <h2>Frota em tempo real</h2>
+        <p>${summary.total || 0} veículos ligados à central · atualização automática a cada 60 segundos</p>
+      </div>
+      <div class="tracking-actions">
+        <span class="sync-time">Sincronizado ${relativeTime(data.generated_at)}</span>
+        <button class="btn btn-primary" id="refresh-map">↻ Atualizar agora</button>
+      </div>
+    </div>
+    <div class="fleet-stats">
+      ${fleetStat('Frota ligada', summary.total || 0, 'violet', '⌁')}
+      ${fleetStat('Online agora', summary.online || 0, 'green', '●')}
+      ${fleetStat('Em movimento', data.items.filter(v => Number(v.last_speed) > 0).length, 'cyan', '➜')}
+      ${fleetStat('Sinal atrasado', (summary.stale || 0) + (summary.never || 0), 'amber', '!')}
+    </div>
+    <div class="tracking-workspace">
+      <aside class="fleet-panel">
+        <div class="fleet-toolbar">
+          <div class="fleet-search"><span>⌕</span><input id="fleet-search" placeholder="Buscar placa ou modelo"></div>
+          <div class="fleet-filters">
+            <button class="filter-chip active" data-filter="all">Todos <b>${summary.total || 0}</b></button>
+            <button class="filter-chip" data-filter="online">Online <b>${summary.online || 0}</b></button>
+            <button class="filter-chip" data-filter="stale">Atenção <b>${(summary.stale || 0) + (summary.never || 0)}</b></button>
+          </div>
+        </div>
+        <div class="fleet-list" id="fleet-list">${fleetCards(data.items)}</div>
+      </aside>
+      <div class="map-stage">
+        <div id="map"></div>
+        <div class="map-legend">
+          <span><i class="legend-dot online"></i>Online</span>
+          <span><i class="legend-dot moving"></i>Em movimento</span>
+          <span><i class="legend-dot stale"></i>Sinal atrasado</span>
+        </div>
+        ${withPosition.length ? '' : '<div class="map-empty">Ainda não existem posições disponíveis.</div>'}
+      </div>
+    </div>`);
+
+  const center = withPosition.length ? [Number(withPosition[0].last_lat), Number(withPosition[0].last_lng)] : [-15.77972, -47.92972];
+  mapInstance = L.map('map', { zoomControl: false }).setView(center, withPosition.length ? 12 : 4);
+  L.control.zoom({ position: 'bottomright' }).addTo(mapInstance);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 20,
+    attribution: '&copy; OpenStreetMap &copy; CARTO'
+  }).addTo(mapInstance);
+
+  const markers = new Map();
   const bounds = [];
-  data.items.forEach(v => {
-    const pos = [v.last_lat, v.last_lng]; bounds.push(pos);
-    L.marker(pos).addTo(mapInstance).bindPopup(`<div class="map-popup"><strong>${esc(v.plate)} — ${esc(v.brand)} ${esc(v.model)}</strong><p>${badge(v.status)}</p><p>Velocidade: ${Number(v.last_speed || 0).toFixed(0)} km/h</p><p>Ignição: ${v.last_ignition ? 'Ligada' : 'Desligada'}</p><p>Odómetro: ${number(v.odometer_km)} km</p><p>Atualização: ${dateTimeBr(v.last_tracker_at)}</p></div>`);
+  withPosition.forEach(v => {
+    const pos = [Number(v.last_lat), Number(v.last_lng)];
+    bounds.push(pos);
+    const marker = L.marker(pos, { icon: vehicleMarker(v) }).addTo(mapInstance)
+      .bindPopup(vehiclePopup(v), { className: 'fleet-popup', offset: [0, -8] });
+    markers.set(String(v.id), marker);
   });
-  if (bounds.length > 1) mapInstance.fitBounds(bounds, { padding: [40,40] });
+  if (bounds.length > 1) mapInstance.fitBounds(bounds, { padding: [55, 55], maxZoom: 14 });
+
+  const applyFleetFilter = () => {
+    const query = document.querySelector('#fleet-search').value.trim().toLowerCase();
+    const filter = document.querySelector('.filter-chip.active')?.dataset.filter || 'all';
+    const filtered = data.items.filter(v => {
+      const text = `${v.plate || ''} ${v.brand || ''} ${v.model || ''}`.toLowerCase();
+      const statusMatch = filter === 'all' || (filter === 'stale' ? v.tracker_status !== 'online' : v.tracker_status === filter);
+      return text.includes(query) && statusMatch;
+    });
+    document.querySelector('#fleet-list').innerHTML = fleetCards(filtered);
+    bindFleetCards(markers);
+  };
+  document.querySelector('#fleet-search').oninput = applyFleetFilter;
+  document.querySelectorAll('.filter-chip').forEach(button => button.onclick = () => {
+    document.querySelectorAll('.filter-chip').forEach(item => item.classList.remove('active'));
+    button.classList.add('active');
+    applyFleetFilter();
+  });
+  bindFleetCards(markers);
   document.querySelector('#refresh-map').onclick = () => navigate('tracking');
+  trackingTimer = setInterval(() => currentPage === 'tracking' && navigate('tracking'), 60000);
+}
+
+function fleetStat(label, value, tone, icon) {
+  return `<div class="fleet-stat ${tone}"><span class="stat-icon">${icon}</span><div><strong>${value}</strong><small>${label}</small></div></div>`;
+}
+
+function fleetCards(items) {
+  if (!items.length) return '<div class="fleet-empty">Nenhum veículo corresponde ao filtro.</div>';
+  return items.map(v => {
+    const moving = Number(v.last_speed) > 0;
+    const state = v.tracker_status === 'online' ? (moving ? 'moving' : 'online') : 'stale';
+    const stateLabel = state === 'moving' ? 'Em movimento' : state === 'online' ? 'Online' : v.tracker_status === 'never' ? 'Sem sinal' : 'Sinal atrasado';
+    return `<button class="vehicle-card" data-vehicle="${esc(v.id)}">
+      <span class="vehicle-avatar ${state}">◆</span>
+      <span class="vehicle-main">
+        <span class="vehicle-title"><strong>${esc(v.plate)}</strong><i class="status-dot ${state}"></i></span>
+        <span class="vehicle-model">${esc(v.brand)} ${esc(v.model)}</span>
+        <span class="vehicle-meta"><b>${Number(v.last_speed || 0).toFixed(0)}</b> km/h <i></i> ${number(v.odometer_km)} km</span>
+      </span>
+      <span class="vehicle-state ${state}">${stateLabel}<small>${relativeTime(v.last_tracker_at)}</small></span>
+    </button>`;
+  }).join('');
+}
+
+function bindFleetCards(markers) {
+  document.querySelectorAll('[data-vehicle]').forEach(card => card.onclick = () => {
+    document.querySelectorAll('.vehicle-card').forEach(item => item.classList.remove('selected'));
+    card.classList.add('selected');
+    const marker = markers.get(card.dataset.vehicle);
+    if (marker) {
+      mapInstance.flyTo(marker.getLatLng(), 16, { duration: .7 });
+      marker.openPopup();
+    } else {
+      toast('Este veículo ainda não possui uma posição válida.', true);
+    }
+  });
+}
+
+function vehicleMarker(v) {
+  const state = v.tracker_status === 'online' ? (Number(v.last_speed) > 0 ? 'moving' : 'online') : 'stale';
+  return L.divIcon({
+    className: 'vehicle-marker-wrap',
+    html: `<div class="vehicle-marker ${state}"><span>◆</span><b>${esc(v.plate)}</b></div>`,
+    iconSize: [92, 42],
+    iconAnchor: [21, 21],
+    popupAnchor: [25, -16]
+  });
+}
+
+function vehiclePopup(v) {
+  const online = v.tracker_status === 'online';
+  return `<div class="vehicle-popup">
+    <div class="popup-top"><div><small>${esc(v.type || 'Veículo')}</small><strong>${esc(v.plate)}</strong></div><span class="popup-status ${online ? 'online' : 'stale'}">${online ? 'Online' : 'Atenção'}</span></div>
+    <p>${esc(v.brand)} ${esc(v.model)}</p>
+    <div class="popup-metrics"><span><small>Velocidade</small><b>${Number(v.last_speed || 0).toFixed(0)} km/h</b></span><span><small>Ignição</small><b>${v.last_ignition ? 'Ligada' : 'Desligada'}</b></span><span><small>Odómetro</small><b>${number(v.odometer_km)} km</b></span></div>
+    <div class="popup-foot">Último sinal ${relativeTime(v.last_tracker_at)}</div>
+  </div>`;
+}
+
+function relativeTime(value) {
+  if (!value) return 'nunca';
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (!Number.isFinite(seconds)) return 'agora';
+  if (seconds < 60) return 'agora';
+  if (seconds < 3600) return `há ${Math.floor(seconds / 60)} min`;
+  if (seconds < 86400) return `há ${Math.floor(seconds / 3600)} h`;
+  return `há ${Math.floor(seconds / 86400)} d`;
 }
 
 async function renderMaintenance() {
