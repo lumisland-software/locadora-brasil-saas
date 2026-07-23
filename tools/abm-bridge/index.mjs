@@ -1,16 +1,23 @@
-import { chromium } from 'playwright';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import process from 'node:process';
+import {
+  hasAuthenticatedVehicles,
+  initializeBridge,
+  launchBridgeContext,
+  persistSession,
+  portalUrl
+} from './runtime.mjs';
+
+await initializeBridge();
 
 const CONFIG = {
-  portalUrl: process.env.ABM_PORTAL_URL || 'https://abmtecnologia.abmprotege.net/relatorios/rotas',
+  portalUrl: portalUrl(),
   reportDate: process.env.ABM_REPORT_DATE || '',
   vehicleId: process.env.ABM_VEHICLE_ID || '',
   liveTimeoutMs: positiveInteger(process.env.ABM_LIVE_TIMEOUT_MS, 15000),
   output: resolve(process.env.ABM_OUTPUT || './abm-snapshot.json'),
-  headless: String(process.env.ABM_HEADLESS || 'false').toLowerCase() === 'true',
-  profileDir: resolve('.abm-profile')
+  headless: String(process.env.ABM_HEADLESS || 'false').toLowerCase() === 'true'
 };
 
 const API_BASE_URL = 'https://api-fulltrack4.fulltrackapp.com/';
@@ -21,15 +28,15 @@ const WEBSOCKET_URL = 'wss://websocket-ssl.ftrack.me/?authToken=';
 async function main() {
   console.log('ABM Bridge: a abrir o portal. Faça login manualmente quando solicitado.');
 
-  const context = await chromium.launchPersistentContext(CONFIG.profileDir, {
+  const context = await launchBridgeContext({
     headless: CONFIG.headless,
-    viewport: { width: 1440, height: 900 }
   });
 
   try {
     const page = context.pages()[0] || await context.newPage();
     await page.goto(CONFIG.portalUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await waitForAuthenticatedReportPage(page);
+    await persistSession(context);
 
     const portal = await readPortalContext(page);
     const token = await ensureAccessToken(page);
@@ -91,17 +98,11 @@ async function main() {
 }
 
 async function waitForAuthenticatedReportPage(page) {
-  const authenticatedSelector = '#idVeiculo, #informacoes_usuario';
-  try {
-    await page.waitForSelector(authenticatedSelector, { state: 'attached', timeout: 5000 });
-  } catch {
+  if (!(await hasAuthenticatedVehicles(page, 5000))) {
     console.log('Aguardando login e abertura da página Relatórios > Rota...');
-    await page.waitForSelector(authenticatedSelector, { state: 'attached', timeout: 10 * 60 * 1000 });
-  }
-
-  if (!page.url().includes('/relatorios/rotas')) {
-    await page.goto(CONFIG.portalUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await page.waitForSelector('#idVeiculo', { state: 'attached', timeout: 60000 });
+    if (!(await hasAuthenticatedVehicles(page, 10 * 60 * 1000, 1000))) {
+      throw new Error('A lista de veículos não ficou disponível dentro do tempo limite.');
+    }
   }
 }
 

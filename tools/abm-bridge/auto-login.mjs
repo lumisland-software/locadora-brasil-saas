@@ -1,18 +1,18 @@
-import { chromium } from 'playwright';
-import { readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import {
+  hasAuthenticatedVehicles,
+  initializeBridge,
+  launchBridgeContext,
+  persistSession,
+  portalUrl
+} from './runtime.mjs';
 
-const directory = dirname(fileURLToPath(import.meta.url));
-process.chdir(directory);
-await loadLocalEnv();
+await initializeBridge();
 
 const username = String(process.env.ABM_USERNAME || '').trim();
 const password = String(process.env.ABM_PASSWORD || '');
-const portalUrl = process.env.ABM_PORTAL_URL || 'https://abmtecnologia.abmprotege.net/relatorios/rotas';
-const loginUrl = process.env.ABM_LOGIN_URL || portalUrl;
-const profileDir = resolve('.abm-profile');
+const reportUrl = portalUrl();
+const loginUrl = process.env.ABM_LOGIN_URL || reportUrl;
 const timeoutMs = positiveInteger(process.env.ABM_LOGIN_TIMEOUT_MS, 90000);
 
 if (!username || !password) {
@@ -20,9 +20,8 @@ if (!username || !password) {
   process.exit(2);
 }
 
-const context = await chromium.launchPersistentContext(profileDir, {
+const context = await launchBridgeContext({
   headless: true,
-  viewport: { width: 1440, height: 900 }
 });
 
 try {
@@ -34,7 +33,7 @@ try {
     process.exitCode = 0;
   } else {
     await performLogin(page);
-    await page.goto(portalUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+    await page.goto(reportUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
 
     if (!(await hasAuthenticatedVehicles(page, timeoutMs))) {
       throw new Error('A autenticação não terminou. O portal pode exigir CAPTCHA, MFA ou ter alterado o formulário.');
@@ -42,6 +41,7 @@ try {
 
     const vehicleCount = await page.evaluate(() => Array.from(document.querySelector('#idVeiculo')?.options || [])
       .filter(option => Number(option.value) > 0).length);
+    await persistSession(context);
     console.log(`Reautenticação automática concluída. ${vehicleCount} veículo(s) disponível(is).`);
   }
 } catch (error) {
@@ -112,19 +112,6 @@ async function firstVisible(page, selectors, timeoutMs) {
   return null;
 }
 
-async function hasAuthenticatedVehicles(page, timeoutMs) {
-  try {
-    await page.waitForFunction(() => {
-      const select = document.querySelector('#idVeiculo');
-      const hasVehicles = Array.from(select?.options || []).some(option => Number(option.value) > 0);
-      return location.pathname.includes('/relatorios/rotas') && hasVehicles;
-    }, null, { timeout: timeoutMs, polling: 500 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function configuredSelectors(name, defaults) {
   const configured = String(process.env[name] || '').split(',').map(value => value.trim()).filter(Boolean);
   return configured.length ? configured : defaults;
@@ -133,21 +120,4 @@ function configuredSelectors(name, defaults) {
 function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
-}
-
-async function loadLocalEnv() {
-  let content;
-  try { content = await readFile(resolve('.env'), 'utf8'); } catch { return; }
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const separator = line.indexOf('=');
-    if (separator <= 0) continue;
-    const key = line.slice(0, separator).trim();
-    let value = line.slice(separator + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (!(key in process.env)) process.env[key] = value;
-  }
 }

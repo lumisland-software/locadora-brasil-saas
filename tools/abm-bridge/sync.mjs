@@ -1,16 +1,16 @@
-import { chromium } from 'playwright';
-import { readFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import process from 'node:process';
+import {
+  BRIDGE_DIRECTORY,
+  hasAuthenticatedVehicles,
+  initializeBridge,
+  launchBridgeContext,
+  persistSession,
+  portalUrl
+} from './runtime.mjs';
 
-const directory = dirname(fileURLToPath(import.meta.url));
-process.chdir(directory);
-await loadLocalEnv();
+await initializeBridge();
 
-const portalUrl = process.env.ABM_PORTAL_URL || 'https://abmtecnologia.abmprotege.net/relatorios/rotas';
-const profileDir = resolve('.abm-profile');
 const sessionTimeout = positiveInteger(process.env.ABM_SESSION_CHECK_TIMEOUT_MS, 30000);
 
 let sessionValid = await checkSession();
@@ -40,24 +40,16 @@ const collectorCode = await runNode('index.mjs', { ABM_HEADLESS: 'true' });
 process.exitCode = collectorCode;
 
 async function checkSession() {
-  const context = await chromium.launchPersistentContext(profileDir, {
+  const context = await launchBridgeContext({
     headless: true,
-    viewport: { width: 1440, height: 900 }
   });
 
   try {
     const page = context.pages()[0] || await context.newPage();
-    await page.goto(portalUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    try {
-      await page.waitForFunction(() => {
-        const select = document.querySelector('#idVeiculo');
-        const hasVehicles = Array.from(select?.options || []).some(option => Number(option.value) > 0);
-        return location.pathname.includes('/relatorios/rotas') && hasVehicles;
-      }, null, { timeout: sessionTimeout, polling: 1000 });
-      return true;
-    } catch {
-      return false;
-    }
+    await page.goto(portalUrl(), { waitUntil: 'domcontentloaded', timeout: 60000 });
+    const authenticated = await hasAuthenticatedVehicles(page, sessionTimeout, 1000);
+    if (authenticated) await persistSession(context);
+    return authenticated;
   } finally {
     await context.close();
   }
@@ -66,7 +58,7 @@ async function checkSession() {
 function runNode(filename, extraEnv = {}) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [filename], {
-      cwd: directory,
+      cwd: BRIDGE_DIRECTORY,
       env: { ...process.env, ...extraEnv },
       stdio: 'inherit'
     });
@@ -79,21 +71,4 @@ function runNode(filename, extraEnv = {}) {
 function positiveInteger(value, fallback) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : fallback;
-}
-
-async function loadLocalEnv() {
-  let content;
-  try { content = await readFile(resolve('.env'), 'utf8'); } catch { return; }
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const separator = line.indexOf('=');
-    if (separator <= 0) continue;
-    const key = line.slice(0, separator).trim();
-    let value = line.slice(separator + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (!(key in process.env)) process.env[key] = value;
-  }
 }

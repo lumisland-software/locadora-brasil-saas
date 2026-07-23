@@ -80,7 +80,7 @@ if (-not $WorkshopId) { throw 'O WORKSHOP_ID é obrigatório.' }
 $DefaultIngestUrl = 'https://locadora-brasil-saas.michael-claro-ext.workers.dev/api/integrations/abm/ingest'
 $IngestUrlInput = (Read-Host "Endpoint de ingestão [$DefaultIngestUrl]").Trim()
 $IngestUrl = if ($IngestUrlInput) { $IngestUrlInput } else { $DefaultIngestUrl }
-$PortalUrl = 'https://abmtecnologia.abmprotege.net/relatorios/rotas'
+$PortalUrl = 'https://abmtecnologia.abmprotege.net/relatorios/rotas/'
 $LoginUrlInput = (Read-Host "URL de login ABM, deixe vazio para usar $PortalUrl").Trim()
 $LoginUrl = if ($LoginUrlInput) { $LoginUrlInput } else { $PortalUrl }
 

@@ -91,6 +91,9 @@ npm run check
 ### `npm run login`
 
 Abre o Chromium visível para autenticação manual. É mantido como recurso de diagnóstico ou para portais que exijam CAPTCHA/MFA.
+Ao confirmar a lista de veículos, guarda também uma cópia local dos cookies de sessão em
+`.abm-profile/session-cookies.json`. O `sync` restaura esses cookies antes de abrir o relatório,
+incluindo cookies que o Chromium descartaria ao fechar uma sessão do navegador.
 
 ### `npm run auto-login`
 
@@ -99,6 +102,9 @@ Tenta autenticar sem abrir janela usando as variáveis `ABM_USERNAME` e `ABM_PAS
 ### `npm run sync`
 
 Valida a sessão, tenta renová-la automaticamente, recolhe os dados e envia o snapshot.
+
+Todos os comandos normalizam a página do relatório para a rota canónica terminada em
+`/relatorios/rotas/`, mesmo quando um `.env` antigo contém o endereço sem a barra final.
 
 ### `npm run upload`
 
