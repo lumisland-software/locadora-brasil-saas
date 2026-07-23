@@ -8,7 +8,7 @@ let trackingTimer = null;
 
 const navGroups = [
   { label: 'Visão geral', items: [['dashboard','▦','Dashboard']] },
-  { label: 'Operação', items: [['rentals','↔','Locações'],['customers','●','Locatários'],['inspections','✓','Vistorias']] },
+  { label: 'Operação', items: [['rentals','↔','Locações'],['customers','●','Locatários'],['contracts','▤','Contratos'],['inspections','✓','Vistorias']] },
   { label: 'Frota', items: [['vehicles','◆','Veículos'],['tracking','⌖','Rastreamento'],['maintenance','⚙','Manutenções'],['fines','!','Multas']] },
   { label: 'Financeiro', items: [['charges','$','Cobranças'],['expenses','−','Despesas']] },
   { label: 'Gestão', items: [['trackers','⌁','Integrações GPS'],['audit','≡','Auditoria'],['settings','⚙','Configurações']] }
@@ -140,7 +140,7 @@ async function navigate(page) {
   content.innerHTML = `<div class="empty">A carregar...</div>`;
   try {
     const renderer = {
-      dashboard: renderDashboard, customers: renderCustomers, vehicles: renderVehicles,
+      dashboard: renderDashboard, customers: renderCustomers, contracts: renderContracts, vehicles: renderVehicles,
       rentals: renderRentals, tracking: renderTracking, maintenance: renderMaintenance,
       charges: renderCharges, expenses: renderExpenses, trackers: renderTrackers,
       inspections: renderInspections, fines: renderFines, audit: renderAudit, settings: renderSettings
@@ -181,13 +181,50 @@ async function renderDashboard() {
 
 async function renderCustomers() {
   const data = await api('/api/customers');
-  setContent(pageHeader('Locatários', 'Cadastro, documentação, risco e histórico.', 'Novo locatário', openCustomerModal) + `
+  setContent(pageHeader('Locatários', 'Cadastro, consentimento e verificação com revisão humana.', 'Novo locatário', openCustomerModal) + `
     <div class="panel"><div class="panel-head"><div class="toolbar"><input class="search" id="customer-search" placeholder="Pesquisar nome, CPF ou telefone"></div></div>
-    ${table(['Nome','CPF/CNPJ','Telefone','CNH','Validade','Risco','Estado'], data.items.map(x => [esc(x.name),esc(x.cpf_cnpj),esc(x.phone),esc(x.cnh_number),dateBr(x.cnh_expiry),x.risk_score,badge(x.status)]))}</div>`);
+    ${customerTable(data.items)}</div>`);
+  bindCustomerActions(data.items);
   document.querySelector('#customer-search').oninput = debounce(async e => {
     const d = await api(`/api/customers?q=${encodeURIComponent(e.target.value)}`);
-    document.querySelector('.table-wrap').outerHTML = table(['Nome','CPF/CNPJ','Telefone','CNH','Validade','Risco','Estado'], d.items.map(x => [esc(x.name),esc(x.cpf_cnpj),esc(x.phone),esc(x.cnh_number),dateBr(x.cnh_expiry),x.risk_score,badge(x.status)]));
+    document.querySelector('.table-wrap').outerHTML = customerTable(d.items);
+    bindCustomerActions(d.items);
   }, 250);
+}
+
+function customerTable(items) {
+  return table(['Nome','Documento','Contacto','CNH','Consentimento','Verificação','Ação'], items.map(x => [
+    `<strong>${esc(x.name)}</strong><br><small>${x.person_type === 'company' ? 'Pessoa jurídica' : 'Pessoa física'}</small>`,
+    esc(x.cpf_cnpj), `${esc(x.phone)}<br><small>${esc(x.email)}</small>`,
+    `${esc(x.cnh_number)}<br><small>${dateBr(x.cnh_expiry)}</small>`,
+    badge(x.consent_status), badge(x.verification_status),
+    `<button class="btn btn-sm" data-verify-customer="${x.id}">Verificar</button>`
+  ]));
+}
+
+function bindCustomerActions(items) {
+  document.querySelectorAll('[data-verify-customer]').forEach(btn => {
+    btn.onclick = () => openVerificationModal(items.find(x => x.id === btn.dataset.verifyCustomer));
+  });
+}
+
+async function renderContracts() {
+  const data = await api('/api/contract-templates');
+  setContent(pageHeader('Templates de contrato', 'Modelos versionados com variáveis e histórico imutável.', 'Novo template', () => openContractModal(data.variables)) + `
+    <div class="variable-strip">${data.variables.map(x => `<code>${esc(x)}</code>`).join('')}</div>
+    <div class="panel">${table(['Template','Tipo','Versão','Estado','Atualizado','Ação'], data.items.map(x => [
+      `<strong>${esc(x.name)}</strong><br><small>${esc(x.description)}</small>`, esc(x.document_type),
+      `v${x.version}`, badge(x.status), dateTimeBr(x.updated_at),
+      `<button class="btn btn-sm" data-preview-template="${x.id}">Pré-visualizar</button> <button class="btn btn-sm" data-version-template="${x.id}">Nova versão</button>`
+    ]))}</div>`);
+  document.querySelectorAll('[data-preview-template]').forEach(btn => btn.onclick = () => {
+    const item = data.items.find(x => x.id === btn.dataset.previewTemplate);
+    modal(`${esc(item.name)} · v${item.version}`, `<div class="contract-preview">${esc(item.content)}</div><div class="form-actions"><button class="btn" type="button" onclick="document.querySelector('#modal').remove()">Fechar</button></div>`, () => {});
+  });
+  document.querySelectorAll('[data-version-template]').forEach(btn => btn.onclick = () => {
+    const item = data.items.find(x => x.id === btn.dataset.versionTemplate);
+    openContractModal(data.variables, item);
+  });
 }
 
 async function renderVehicles() {
@@ -427,11 +464,60 @@ async function renderSettings() {
 
 function openCustomerModal() {
   modal('Novo locatário', `<form id="modal-form"><div class="form-grid">
-    <label class="full">Nome<input name="name" required></label><label>CPF/CNPJ<input name="cpf_cnpj"></label><label>Telefone<input name="phone"></label>
+    <label>Tipo<select name="person_type"><option value="individual">Pessoa física</option><option value="company">Pessoa jurídica</option></select></label>
+    <label>Nome / razão social<input name="name" required></label><label>CPF/CNPJ<input name="cpf_cnpj"></label><label>RG<input name="rg_number"></label>
+    <label>Data de nascimento<input name="birth_date" type="date"></label><label>Telefone / WhatsApp<input name="phone"></label>
     <label>E-mail<input name="email" type="email"></label><label>CNH<input name="cnh_number"></label><label>Validade CNH<input name="cnh_expiry" type="date"></label>
+    <label>Categoria CNH<input name="cnh_category" placeholder="A, B, AB..."></label>
     <label>Score interno (0-100)<input name="risk_score" type="number" min="0" max="100" value="50"></label><label>Estado<select name="status"><option value="active">Ativo</option><option value="blocked">Bloqueado</option></select></label>
+    <label class="full consent-check"><input name="consent_status" type="checkbox" value="granted"> Consentimento documentado para validações e tratamento dos dados informados</label>
     <label class="full">Endereço<input name="address"></label><label class="full">Observações<textarea name="notes"></textarea></label>
   </div>${formButtons()}</form>`, submitModal('/api/customers','customers'));
+}
+
+function openVerificationModal(customer) {
+  modal(`Verificar · ${esc(customer.name)}`, `<form id="modal-form"><div class="form-grid">
+    <div class="full note">Registe apenas verificações obtidas legalmente, com finalidade definida e consentimento aplicável. O resultado exige revisão humana.</div>
+    <label>Tipo<select name="verification_type"><option value="identity">Identidade / CPF</option><option value="cnh">CNH</option><option value="address">Endereço</option><option value="credit">Crédito / restrições</option><option value="judicial_certificate">Certidão judicial apresentada</option><option value="antifraud">Antifraude</option></select></label>
+    <label>Estado<select name="status"><option value="approved">Aprovado</option><option value="attention">Requer atenção</option><option value="rejected">Rejeitado após revisão</option><option value="pending">Pendente</option></select></label>
+    <label>Origem / fornecedor<input name="provider" placeholder="Órgão, fornecedor ou validação manual"></label><label>Referência<input name="reference" placeholder="Protocolo ou documento"></label>
+    <label>Data da verificação<input name="checked_at" type="datetime-local"></label><label>Validade<input name="expires_at" type="date"></label>
+    <label class="full">Resumo objetivo do resultado<textarea name="result_summary" required></textarea></label>
+    <label class="full">Notas da revisão humana<textarea name="review_notes"></textarea></label>
+  </div>${formButtons('Registar verificação')}</form>`, submitModal(`/api/customers/${customer.id}/verifications`, 'customers'));
+}
+
+function openContractModal(variables, source=null) {
+  const endpoint = source ? `/api/contract-templates/${source.id}/version` : '/api/contract-templates';
+  modal(source ? `Nova versão · ${esc(source.name)}` : 'Novo template de contrato', `<form id="modal-form"><div class="form-grid">
+    <label>Nome<input name="name" value="${esc(source?.name || '')}" required></label>
+    <label>Tipo<select name="document_type"><option value="rental">Locação</option><option value="addendum">Aditivo</option><option value="termination">Encerramento</option><option value="inspection">Termo de vistoria</option></select></label>
+    <label class="full">Descrição<input name="description" value="${esc(source?.description || '')}"></label>
+    <label>Estado<select name="status"><option value="draft">Rascunho</option><option value="active">Ativo</option></select></label>
+    <div class="full variable-help">${variables.map(x => `<button class="variable-token" type="button" data-variable="${esc(x)}">${esc(x)}</button>`).join('')}</div>
+    <label class="full">Conteúdo do contrato<textarea id="contract-content" name="content" rows="20" required>${esc(source?.content || defaultContractTemplate())}</textarea></label>
+  </div>${formButtons(source ? 'Criar nova versão' : 'Guardar template')}</form>`, submitModal(endpoint, 'contracts'));
+  document.querySelectorAll('[data-variable]').forEach(btn => btn.onclick = () => insertAtCursor(document.querySelector('#contract-content'), btn.dataset.variable));
+}
+
+function defaultContractTemplate() {
+  return `CONTRATO DE LOCAÇÃO DE VEÍCULO
+
+LOCADORA: {{locadora.nome}}, inscrita sob {{locadora.cnpj}}.
+LOCATÁRIO: {{cliente.nome}}, documento {{cliente.cpf_cnpj}}, CNH {{cliente.cnh}}.
+VEÍCULO: {{veiculo.marca}} {{veiculo.modelo}}, placa {{veiculo.placa}}.
+
+Período: {{locacao.inicio}} a {{locacao.fim}}.
+Valor: {{locacao.valor}}. Caução: {{locacao.caucao}}.
+
+As partes declaram ter lido e aceite as condições deste contrato.`;
+}
+
+function insertAtCursor(input, text) {
+  const start = input.selectionStart;
+  input.value = input.value.slice(0, start) + text + input.value.slice(input.selectionEnd);
+  input.focus();
+  input.selectionStart = input.selectionEnd = start + text.length;
 }
 
 function openVehicleModal(trackers) {
@@ -525,6 +611,7 @@ function modal(title, body, onSubmit) {
   root.querySelector('.close').onclick = closeModal;
   root.onclick = e => { if (e.target === root) closeModal(); };
   const form = root.querySelector('form');
+  if (!form) return;
   form.onsubmit = async e => {
     e.preventDefault();
     const submit = form.querySelector('[type=submit]'); submit.disabled = true;
@@ -556,7 +643,7 @@ function setContent(html) { app.querySelector('#content').innerHTML = html; }
 function metric(label,value,foot){ return `<div class="card"><div class="card-label">${label}</div><div class="card-value">${value}</div><div class="card-foot">${foot}</div></div>`; }
 function mini(label,value){ return `<div><div class="card-label">${label}</div><div class="card-value" style="font-size:24px">${value}</div></div>`; }
 function table(headers, rows) { return `<div class="table-wrap"><table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.length?rows.map(r=>`<tr>${r.map(c=>`<td>${c ?? '—'}</td>`).join('')}</tr>`).join(''):`<tr><td colspan="${headers.length}" class="empty">Nenhum registo encontrado.</td></tr>`}</tbody></table></div>`; }
-function badge(value){ const v=String(value ?? ''); const labels={active:'Ativo',inactive:'Inativo',available:'Disponível',rented:'Alugado',maintenance:'Manutenção',blocked:'Bloqueado',pending:'Pendente',paid:'Pago',ok:'Em dia',warning:'Próximo',due:'Vence hoje',overdue:'Vencido',open:'Aberta',sync:'Sincronização',create:'Criação',complete:'Conclusão',pay:'Pagamento'}; return `<span class="badge ${esc(v)}">${labels[v]||esc(v)}</span>`; }
+function badge(value){ const v=String(value ?? ''); const labels={active:'Ativo',inactive:'Inativo',available:'Disponível',rented:'Alugado',maintenance:'Manutenção',blocked:'Bloqueado',pending:'Pendente',paid:'Pago',ok:'Em dia',warning:'Próximo',due:'Vence hoje',overdue:'Vencido',open:'Aberta',sync:'Sincronização',create:'Criação',complete:'Conclusão',pay:'Pagamento',granted:'Consentido',approved:'Aprovado',attention:'Atenção',rejected:'Rejeitado',expired:'Expirado',draft:'Rascunho'}; return `<span class="badge ${esc(v)}">${labels[v]||esc(v)}</span>`; }
 function bindGo(){ document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>navigate(b.dataset.go)); }
 function options(items,valueKey,labelKey){ return items.map(x=>`<option value="${esc(x[valueKey])}">${esc(x[labelKey])}</option>`).join(''); }
 function vehicleName(v){ return v ? `${esc(v.plate)} — ${esc(v.brand)} ${esc(v.model)}` : '—'; }

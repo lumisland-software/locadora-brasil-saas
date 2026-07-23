@@ -68,6 +68,9 @@ tr:hover td { background: #fafcff; }
 .badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 5px 9px; font-size: 11px; font-weight: 800; background: #eef2ff; color: #3730a3; }
 .badge.ok, .badge.available, .badge.paid, .badge.active { color: var(--success); background: #dcfce7; }
 .badge.warning, .badge.pending { color: var(--warning); background: #fef3c7; }
+.badge.attention, .badge.draft { color: var(--warning); background: #fef3c7; }
+.badge.approved, .badge.granted { color: var(--success); background: #dcfce7; }
+.badge.rejected, .badge.expired { color: var(--danger); background: #fee2e2; }
 .badge.due, .badge.overdue, .badge.open { color: var(--danger); background: #fee2e2; }
 .badge.rented { color: #1d4ed8; background: #dbeafe; }
 .btn { border: 1px solid var(--line); background: #fff; color: var(--text); padding: 9px 13px; border-radius: 9px; font-weight: 700; }
@@ -81,6 +84,13 @@ tr:hover td { background: #fafcff; }
 .input, input, select, textarea { width: 100%; border: 1px solid #d7dce3; border-radius: 9px; padding: 10px 11px; background: #fff; color: var(--text); outline: none; }
 input:focus, select:focus, textarea:focus { border-color: #7aa2f7; box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
 label { display: grid; gap: 6px; color: #344054; font-size: 13px; font-weight: 700; }
+.consent-check { grid-template-columns: 20px 1fr; align-items: start; padding: 13px; border: 1px solid #bfdbfe; border-radius: 10px; background: #eff6ff; }
+.consent-check input { width: 17px; margin-top: 1px; }
+.variable-strip, .variable-help { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
+.variable-strip code, .variable-token { border: 1px solid #d9d2ff; border-radius: 999px; padding: 6px 9px; color: #5947d8; background: #f4f1ff; font-size: 11px; }
+.variable-token { cursor: pointer; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.contract-preview { min-height: 420px; padding: 28px; border: 1px solid var(--line); border-radius: 12px; background: #fff; white-space: pre-wrap; font-family: Georgia, serif; line-height: 1.7; }
+#contract-content { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.55; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 14px; }
 .form-grid .full { grid-column: 1 / -1; }
 .form-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }

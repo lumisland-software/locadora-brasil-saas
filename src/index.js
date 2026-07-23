@@ -46,6 +46,18 @@ async function handleApi(request, env, ctx, url) {
     if (method === 'GET') return listCustomers(env, user, url);
     if (method === 'POST') return createCustomer(request, env, user);
   }
+  if (path.match(/^\/api\/customers\/[^/]+\/verifications$/)) {
+    const customerId = path.split('/')[3];
+    if (method === 'GET') return listCustomerVerifications(env, user, customerId);
+    if (method === 'POST') return createCustomerVerification(request, env, user, customerId);
+  }
+  if (path === '/api/contract-templates') {
+    if (method === 'GET') return listContractTemplates(env, user);
+    if (method === 'POST') return createContractTemplate(request, env, user);
+  }
+  if (path.match(/^\/api\/contract-templates\/[^/]+\/version$/) && method === 'POST') {
+    return createContractTemplateVersion(request, env, user, path.split('/')[3]);
+  }
 
   if (path === '/api/vehicles') {
     if (method === 'GET') return listVehicles(env, user, url);
@@ -276,14 +288,107 @@ async function createCustomer(request, env, user) {
   const body = await readJson(request);
   requireFields(body, ['name']);
   const id = crypto.randomUUID();
+  const consentStatus = body.consent_status === 'granted' ? 'granted' : 'pending';
   await env.DB.prepare(`INSERT INTO customers
-    (id, workshop_id, name, cpf_cnpj, phone, email, cnh_number, cnh_expiry, address, status, risk_score, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    (id, workshop_id, name, cpf_cnpj, phone, email, cnh_number, cnh_expiry, address, status, risk_score, notes,
+     person_type, birth_date, rg_number, cnh_category, consent_status, consent_at, verification_status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`)
     .bind(id, user.workshop_id, clean(body.name), clean(body.cpf_cnpj), clean(body.phone), clean(body.email),
       clean(body.cnh_number), clean(body.cnh_expiry), clean(body.address), clean(body.status) || 'active',
-      Number(body.risk_score ?? 50), clean(body.notes)).run();
+      Math.min(100, Math.max(0, Number(body.risk_score ?? 50))), clean(body.notes),
+      clean(body.person_type) || 'individual', clean(body.birth_date), clean(body.rg_number),
+      clean(body.cnh_category), consentStatus, consentStatus === 'granted' ? new Date().toISOString() : null).run();
   await audit(env, user, 'create', 'customer', id, body);
   return json({ success: true, id }, 201);
+}
+
+async function ensureCustomer(env, user, customerId) {
+  const customer = await env.DB.prepare('SELECT * FROM customers WHERE id = ? AND workshop_id = ?')
+    .bind(customerId, user.workshop_id).first();
+  if (!customer) throw new HttpError(404, 'Locatário não encontrado.');
+  return customer;
+}
+
+async function listCustomerVerifications(env, user, customerId) {
+  await ensureCustomer(env, user, customerId);
+  const rows = await env.DB.prepare(`SELECT cv.*, u.name AS reviewer_name
+    FROM customer_verifications cv LEFT JOIN users u ON u.id = cv.reviewed_by
+    WHERE cv.workshop_id = ? AND cv.customer_id = ? ORDER BY cv.checked_at DESC`)
+    .bind(user.workshop_id, customerId).all();
+  return json({ items: rows.results || [] });
+}
+
+async function createCustomerVerification(request, env, user, customerId) {
+  await ensureCustomer(env, user, customerId);
+  const body = await readJson(request);
+  requireFields(body, ['verification_type', 'status']);
+  const allowed = ['pending', 'approved', 'attention', 'rejected', 'expired'];
+  if (!allowed.includes(body.status)) throw new HttpError(400, 'Estado de verificação inválido.');
+  const id = crypto.randomUUID();
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO customer_verifications
+      (id, workshop_id, customer_id, verification_type, provider, reference, status, result_summary,
+       checked_at, expires_at, reviewed_by, review_notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, user.workshop_id, customerId, clean(body.verification_type), clean(body.provider),
+        clean(body.reference), body.status, clean(body.result_summary), clean(body.checked_at) || new Date().toISOString(),
+        clean(body.expires_at), user.id, clean(body.review_notes)),
+    env.DB.prepare('UPDATE customers SET verification_status = ? WHERE id = ? AND workshop_id = ?')
+      .bind(body.status, customerId, user.workshop_id)
+  ]);
+  await audit(env, user, 'verify', 'customer', customerId, { verification_id: id, ...body });
+  return json({ success: true, id }, 201);
+}
+
+async function listContractTemplates(env, user) {
+  const rows = await env.DB.prepare(`SELECT ct.*, u.name AS created_by_name
+    FROM contract_templates ct LEFT JOIN users u ON u.id = ct.created_by
+    WHERE ct.workshop_id = ? ORDER BY ct.name, ct.version DESC`).bind(user.workshop_id).all();
+  return json({ items: rows.results || [], variables: contractVariables() });
+}
+
+async function createContractTemplate(request, env, user) {
+  const body = await readJson(request);
+  requireFields(body, ['name', 'content']);
+  const id = crypto.randomUUID();
+  const status = body.status === 'active' ? 'active' : 'draft';
+  await env.DB.prepare(`INSERT INTO contract_templates
+    (id, workshop_id, name, description, document_type, content, version, status, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`)
+    .bind(id, user.workshop_id, clean(body.name), clean(body.description), clean(body.document_type) || 'rental',
+      String(body.content), status, user.id).run();
+  await audit(env, user, 'create', 'contract_template', id, { ...body, content: '[conteúdo omitido]' });
+  return json({ success: true, id, version: 1 }, 201);
+}
+
+async function createContractTemplateVersion(request, env, user, templateId) {
+  const source = await env.DB.prepare('SELECT * FROM contract_templates WHERE id = ? AND workshop_id = ?')
+    .bind(templateId, user.workshop_id).first();
+  if (!source) throw new HttpError(404, 'Template não encontrado.');
+  const body = await readJson(request);
+  const rootId = source.parent_id || source.id;
+  const latest = await env.DB.prepare(`SELECT MAX(version) AS version FROM contract_templates
+    WHERE workshop_id = ? AND (id = ? OR parent_id = ?)`).bind(user.workshop_id, rootId, rootId).first();
+  const version = Number(latest?.version || source.version || 1) + 1;
+  const id = crypto.randomUUID();
+  await env.DB.prepare(`INSERT INTO contract_templates
+    (id, workshop_id, name, description, document_type, content, version, parent_id, status, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(id, user.workshop_id, clean(body.name) || source.name, clean(body.description) || source.description,
+      clean(body.document_type) || source.document_type, body.content == null ? source.content : String(body.content),
+      version, rootId, body.status === 'active' ? 'active' : 'draft', user.id).run();
+  await audit(env, user, 'version', 'contract_template', id, { source_id: source.id, version });
+  return json({ success: true, id, version }, 201);
+}
+
+function contractVariables() {
+  return [
+    '{{locadora.nome}}', '{{locadora.cnpj}}', '{{locadora.endereco}}',
+    '{{cliente.nome}}', '{{cliente.cpf_cnpj}}', '{{cliente.cnh}}', '{{cliente.endereco}}',
+    '{{veiculo.placa}}', '{{veiculo.marca}}', '{{veiculo.modelo}}',
+    '{{locacao.numero}}', '{{locacao.inicio}}', '{{locacao.fim}}',
+    '{{locacao.valor}}', '{{locacao.caucao}}'
+  ];
 }
 
 async function listVehicles(env, user, url) {
